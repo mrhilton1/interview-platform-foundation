@@ -274,7 +274,7 @@ function PlatformView({
       <section className="section empty-state">
         <Lock size={28} />
         <h3>Platform access is not enabled for this login.</h3>
-        <p>Your workspace view still works. Add this user to `platform.platform_admins` to see all customer workspaces.</p>
+        <p>Sign in with the configured platform owner account or refresh after a new deployment finishes.</p>
       </section>
     );
   }
