@@ -4,6 +4,7 @@ import {
   BriefcaseBusiness,
   Building2,
   CheckCircle2,
+  Copy,
   FileText,
   KeyRound,
   Link,
@@ -763,11 +764,21 @@ function InterviewLaunchPanel({
   const [participantName, setParticipantName] = useState('New Stakeholder');
   const [participantEmail, setParticipantEmail] = useState('');
   const [createdLink, setCreatedLink] = useState<string | null>(null);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   async function createSession() {
     const token = await onCreateInterviewSession({ programId: program.id, participantName, participantEmail });
     if (token) {
       setCreatedLink(`${window.location.origin}/interview/${token}`);
+    }
+  }
+
+  async function copyLink(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyNotice('Copied link.');
+    } catch {
+      setCopyNotice('Select and copy the link below.');
     }
   }
 
@@ -798,21 +809,39 @@ function InterviewLaunchPanel({
       {createdLink && (
         <div className="link-box">
           <span>Participant URL</span>
-          <a href={createdLink} target="_blank" rel="noreferrer">
-            {createdLink}
-          </a>
+          <div className="copy-row">
+            <a href={createdLink} target="_blank" rel="noreferrer">
+              {createdLink}
+            </a>
+            <button className="icon-button" type="button" onClick={() => void copyLink(createdLink)} aria-label="Copy participant link">
+              <Copy size={16} />
+            </button>
+          </div>
         </div>
       )}
+      {copyNotice && <p className="soft-copy">{copyNotice}</p>}
 
       <div className="runtime-list">
         <h4>Recent sessions</h4>
         {sessions.map((item) => {
           const participant = participants.find((candidate) => candidate.id === item.participant_id);
+          const token = typeof item.metadata?.public_token === 'string' ? item.metadata.public_token : null;
+          const link = token ? `${window.location.origin}/interview/${token}` : null;
           return (
             <article key={item.id} className="runtime-row">
               <div>
                 <strong>{item.title}</strong>
                 <span>{participant?.email ?? participant?.display_name ?? 'Participant'}</span>
+                {link && (
+                  <div className="copy-row compact-copy-row">
+                    <a href={link} target="_blank" rel="noreferrer">
+                      {link}
+                    </a>
+                    <button className="icon-button" type="button" onClick={() => void copyLink(link)} aria-label="Copy participant link">
+                      <Copy size={16} />
+                    </button>
+                  </div>
+                )}
               </div>
               <small>{item.status}</small>
             </article>

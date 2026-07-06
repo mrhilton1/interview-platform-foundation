@@ -191,7 +191,8 @@ h4 {
 .sku-pill,
 .primary-button,
 .secondary-button,
-.ghost-button {
+.ghost-button,
+.icon-button {
   align-items: center;
   border-radius: 8px;
   display: inline-flex;
@@ -234,6 +235,18 @@ h4 {
 .ghost-button.dark {
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #d9e5e2;
+}
+
+.icon-button {
+  background: white;
+  border: 1px solid #d8e4e0;
+  color: #31433f;
+  cursor: pointer;
+  flex: 0 0 auto;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  width: 34px;
 }
 
 .metric-grid {
@@ -586,11 +599,27 @@ h4 {
   gap: 6px;
 }
 
-.link-box a {
+.link-box a,
+.copy-row a {
   color: #1f7a68;
   font-size: 13px;
   font-weight: 750;
   overflow-wrap: anywhere;
+}
+
+.copy-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.copy-row a {
+  min-width: 0;
+}
+
+.compact-copy-row {
+  margin-top: 8px;
 }
 
 .details-grid {
