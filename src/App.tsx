@@ -6,10 +6,13 @@ import {
   CheckCircle2,
   FileText,
   KeyRound,
+  Link,
   Lock,
   LogOut,
+  MessageCircle,
   Plus,
   RefreshCw,
+  Save,
   ShieldCheck,
   Sparkles,
   UsersRound
@@ -57,6 +60,59 @@ type ProgramRow = {
   name: string;
   status: string;
   label_overrides: Record<string, string>;
+  manifest_overrides: {
+    questions?: InterviewQuestion[];
+  };
+  created_at: string;
+};
+
+type ParticipantRow = {
+  id: string;
+  workspace_id: string;
+  program_id: string | null;
+  display_name: string;
+  email: string | null;
+  role_label: string;
+  created_at: string;
+};
+
+type SessionRow = {
+  id: string;
+  workspace_id: string;
+  program_id: string;
+  participant_id: string | null;
+  track_key: string;
+  status: string;
+  title: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  completed_at: string | null;
+};
+
+type ArtifactRow = {
+  id: string;
+  workspace_id: string;
+  program_id: string | null;
+  session_id: string | null;
+  artifact_type: string;
+  title: string;
+  body: string;
+  created_at: string;
+};
+
+type MessageRow = {
+  id: string;
+  role: 'agent' | 'participant' | 'system';
+  content: string;
+  sequence: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+type InterviewQuestion = {
+  id: string;
+  text: string;
+  extract_key: string;
 };
 
 type AppData = {
@@ -66,6 +122,9 @@ type AppData = {
   myWorkspaces: WorkspaceRow[];
   profiles: ProfileRow[];
   programs: ProgramRow[];
+  participants: ParticipantRow[];
+  sessions: SessionRow[];
+  artifacts: ArtifactRow[];
   isPlatformAdmin: boolean;
 };
 
@@ -76,10 +135,94 @@ const emptyData: AppData = {
   myWorkspaces: [],
   profiles: [],
   programs: [],
+  participants: [],
+  sessions: [],
+  artifacts: [],
   isPlatformAdmin: false
 };
 
+type PublicInterviewData = {
+  session: SessionRow;
+  program: Pick<ProgramRow, 'id' | 'name' | 'program_key' | 'label_overrides'> & { questions: InterviewQuestion[] };
+  participant: ParticipantRow;
+  messages: MessageRow[];
+};
+
+const defaultQuestionBank: Record<string, InterviewQuestion[]> = {
+  'ai-readiness': [
+    {
+      id: 'current-state',
+      text: 'Where is your team already using AI today, even informally?',
+      extract_key: 'Current AI usage'
+    },
+    {
+      id: 'workflow-friction',
+      text: 'Which recurring workflows feel slow, manual, or dependent on tribal knowledge?',
+      extract_key: 'Workflow friction'
+    },
+    {
+      id: 'risk-readiness',
+      text: 'What risks, policies, or customer concerns would need to be handled before AI could be adopted more broadly?',
+      extract_key: 'Adoption risks'
+    }
+  ],
+  'sales-discovery': [
+    {
+      id: 'buyer-process',
+      text: 'Walk me through how a qualified opportunity moves from first conversation to signed customer.',
+      extract_key: 'Sales process'
+    },
+    {
+      id: 'objections',
+      text: 'What objections or points of confusion slow deals down most often?',
+      extract_key: 'Sales objections'
+    },
+    {
+      id: 'enablement-gap',
+      text: 'What information do sellers repeatedly need but have trouble finding or explaining?',
+      extract_key: 'Enablement gaps'
+    }
+  ],
+  'customer-success-discovery': [
+    {
+      id: 'success-signals',
+      text: 'What behaviors tell you a customer is getting real value?',
+      extract_key: 'Success signals'
+    },
+    {
+      id: 'retention-risk',
+      text: 'Where do customers tend to get stuck, surprised, or disappointed?',
+      extract_key: 'Retention risks'
+    },
+    {
+      id: 'playbook',
+      text: 'What should every new team member understand about supporting these customers well?',
+      extract_key: 'Support playbook'
+    }
+  ],
+  'legacy-weaver': [
+    {
+      id: 'origin-story',
+      text: 'Where would you like to begin your story?',
+      extract_key: 'Origin story'
+    },
+    {
+      id: 'meaningful-memory',
+      text: 'Tell me about a memory that still feels vivid or meaningful to you.',
+      extract_key: 'Meaningful memory'
+    },
+    {
+      id: 'legacy-message',
+      text: 'What would you want future generations to understand about your life?',
+      extract_key: 'Legacy message'
+    }
+  ]
+};
+
 export function App() {
+  const interviewToken = window.location.pathname.startsWith('/interview/')
+    ? window.location.pathname.split('/interview/')[1]?.replace(/\/$/, '') || null
+    : null;
   const [session, setSession] = useState<Session | null>(null);
   const [data, setData] = useState<AppData>(emptyData);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
@@ -169,6 +312,60 @@ export function App() {
     }
   }
 
+  async function updateProgram(input: { programId: string; name: string; questions: InterviewQuestion[] }) {
+    if (!supabase || !session?.user) return;
+
+    setLoading(true);
+    setNotice(null);
+
+    try {
+      const { error } = await supabase.rpc('platform_update_program', {
+        program_id: input.programId,
+        program_name: input.name,
+        interview_questions: input.questions
+      });
+
+      throwIfError(error);
+      setNotice('Program interview setup saved.');
+      await loadData(session.user);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not save program.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createInterviewSession(input: { programId: string; participantName: string; participantEmail: string }) {
+    if (!supabase || !session?.user) return null;
+
+    setLoading(true);
+    setNotice(null);
+
+    try {
+      const { data: created, error } = await supabase.rpc('platform_create_interview_session', {
+        program_id: input.programId,
+        participant_name: input.participantName,
+        participant_email: input.participantEmail || null
+      });
+
+      throwIfError(error);
+      await loadData(session.user);
+
+      const token = typeof created === 'object' && created && 'token' in created ? String((created as { token: unknown }).token) : null;
+      setNotice(token ? 'Interview link created.' : 'Interview session created.');
+      return token;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not create interview.');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (interviewToken) {
+    return <PublicInterview token={interviewToken} />;
+  }
+
   if (!supabase) {
     return <MissingConfig />;
   }
@@ -251,8 +448,13 @@ export function App() {
             programs={selectedPrograms}
             myWorkspaces={data.myWorkspaces}
             editions={data.editions}
+            participants={data.participants}
+            sessions={data.sessions}
+            artifacts={data.artifacts}
             onCreateWorkspace={createWorkspace}
             onSelectWorkspace={setSelectedWorkspaceId}
+            onUpdateProgram={updateProgram}
+            onCreateInterviewSession={createInterviewSession}
           />
         )}
       </section>
@@ -333,8 +535,13 @@ function WorkspaceView({
   programs,
   myWorkspaces,
   editions,
+  participants,
+  sessions,
+  artifacts,
   onCreateWorkspace,
-  onSelectWorkspace
+  onSelectWorkspace,
+  onUpdateProgram,
+  onCreateInterviewSession
 }: {
   workspace: WorkspaceRow | null;
   edition: EditionRow | null | undefined;
@@ -343,9 +550,26 @@ function WorkspaceView({
   programs: ProgramRow[];
   myWorkspaces: WorkspaceRow[];
   editions: EditionRow[];
+  participants: ParticipantRow[];
+  sessions: SessionRow[];
+  artifacts: ArtifactRow[];
   onCreateWorkspace: (input: { name: string; editionKey: string }) => Promise<void>;
   onSelectWorkspace: (id: string) => void;
+  onUpdateProgram: (input: { programId: string; name: string; questions: InterviewQuestion[] }) => Promise<void>;
+  onCreateInterviewSession: (input: { programId: string; participantName: string; participantEmail: string }) => Promise<string | null>;
 }) {
+  const [selectedProgramId, setSelectedProgramId] = useState<string | null>(programs[0]?.id ?? null);
+  const selectedProgram = programs.find((program) => program.id === selectedProgramId) ?? programs[0] ?? null;
+  const workspaceSessions = workspace ? sessions.filter((item) => item.workspace_id === workspace.id) : [];
+  const workspaceParticipants = workspace ? participants.filter((item) => item.workspace_id === workspace.id) : [];
+  const workspaceArtifacts = workspace ? artifacts.filter((item) => item.workspace_id === workspace.id) : [];
+
+  useEffect(() => {
+    if (!selectedProgramId || !programs.some((program) => program.id === selectedProgramId)) {
+      setSelectedProgramId(programs[0]?.id ?? null);
+    }
+  }, [programs, selectedProgramId]);
+
   if (!workspace) {
     return (
       <section className="split">
@@ -363,9 +587,9 @@ function WorkspaceView({
     <>
       <section className="metric-grid">
         <Metric icon={<Boxes />} label="Programs" value={programs.length.toString()} />
-        <Metric icon={<UsersRound />} label="Participants" value="0" />
-        <Metric icon={<FileText />} label="Artifacts" value="0" />
-        <Metric icon={<CheckCircle2 />} label="Sessions" value="0" />
+        <Metric icon={<UsersRound />} label="Participants" value={workspaceParticipants.length.toString()} />
+        <Metric icon={<FileText />} label="Artifacts" value={workspaceArtifacts.length.toString()} />
+        <Metric icon={<CheckCircle2 />} label="Sessions" value={workspaceSessions.length.toString()} />
       </section>
 
       <section className="split">
@@ -394,7 +618,11 @@ function WorkspaceView({
 
           <div className="program-grid compact-grid">
             {programs.map((program) => (
-              <article key={program.id} className="program-card">
+              <button
+                key={program.id}
+                className={`program-card selectable-card ${selectedProgram?.id === program.id ? 'selected' : ''}`}
+                onClick={() => setSelectedProgramId(program.id)}
+              >
                 <div className="card-topline">
                   <span>{program.status}</span>
                   <BriefcaseBusiness size={17} />
@@ -415,7 +643,7 @@ function WorkspaceView({
                     ))
                   )}
                 </dl>
-              </article>
+              </button>
             ))}
           </div>
         </div>
@@ -439,7 +667,174 @@ function WorkspaceView({
           </div>
         </div>
       </section>
+
+      {selectedProgram && (
+        <section className="split wide-split">
+          <ProgramSetupPanel program={selectedProgram} onUpdateProgram={onUpdateProgram} />
+          <InterviewLaunchPanel
+            program={selectedProgram}
+            sessions={workspaceSessions.filter((item) => item.program_id === selectedProgram.id)}
+            participants={workspaceParticipants}
+            artifacts={workspaceArtifacts.filter((item) => item.program_id === selectedProgram.id)}
+            onCreateInterviewSession={onCreateInterviewSession}
+          />
+        </section>
+      )}
     </>
+  );
+}
+
+function ProgramSetupPanel({
+  program,
+  onUpdateProgram
+}: {
+  program: ProgramRow;
+  onUpdateProgram: (input: { programId: string; name: string; questions: InterviewQuestion[] }) => Promise<void>;
+}) {
+  const [name, setName] = useState(program.name);
+  const [questionsText, setQuestionsText] = useState(formatQuestions(getProgramQuestions(program)));
+
+  useEffect(() => {
+    setName(program.name);
+    setQuestionsText(formatQuestions(getProgramQuestions(program)));
+  }, [program.id, program.name, program.manifest_overrides]);
+
+  const questions = parseQuestions(questionsText, program.program_key);
+
+  return (
+    <section className="section form-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Agent Setup</p>
+          <h3>Interview structure</h3>
+        </div>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => void onUpdateProgram({ programId: program.id, name, questions })}
+          disabled={questions.length === 0}
+        >
+          <Save size={16} />
+          Save
+        </button>
+      </div>
+
+      <label>
+        Program name
+        <input value={name} onChange={(event) => setName(event.target.value)} />
+      </label>
+
+      <label>
+        Interview questions
+        <textarea
+          value={questionsText}
+          onChange={(event) => setQuestionsText(event.target.value)}
+          rows={9}
+          placeholder="One question per line"
+        />
+      </label>
+
+      <div className="question-preview">
+        {questions.map((question, index) => (
+          <div key={question.id}>
+            <span>{index + 1}</span>
+            <p>{question.text}</p>
+            <small>{question.extract_key}</small>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function InterviewLaunchPanel({
+  program,
+  sessions,
+  participants,
+  artifacts,
+  onCreateInterviewSession
+}: {
+  program: ProgramRow;
+  sessions: SessionRow[];
+  participants: ParticipantRow[];
+  artifacts: ArtifactRow[];
+  onCreateInterviewSession: (input: { programId: string; participantName: string; participantEmail: string }) => Promise<string | null>;
+}) {
+  const [participantName, setParticipantName] = useState('New Stakeholder');
+  const [participantEmail, setParticipantEmail] = useState('');
+  const [createdLink, setCreatedLink] = useState<string | null>(null);
+
+  async function createSession() {
+    const token = await onCreateInterviewSession({ programId: program.id, participantName, participantEmail });
+    if (token) {
+      setCreatedLink(`${window.location.origin}/interview/${token}`);
+    }
+  }
+
+  return (
+    <section className="section form-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Interviews</p>
+          <h3>Create participant link</h3>
+        </div>
+      </div>
+
+      <label>
+        Participant name
+        <input value={participantName} onChange={(event) => setParticipantName(event.target.value)} />
+      </label>
+
+      <label>
+        Participant email
+        <input value={participantEmail} onChange={(event) => setParticipantEmail(event.target.value)} type="email" />
+      </label>
+
+      <button className="primary-button" type="button" onClick={() => void createSession()} disabled={!participantName.trim()}>
+        <Link size={17} />
+        Create interview link
+      </button>
+
+      {createdLink && (
+        <div className="link-box">
+          <span>Participant URL</span>
+          <a href={createdLink} target="_blank" rel="noreferrer">
+            {createdLink}
+          </a>
+        </div>
+      )}
+
+      <div className="runtime-list">
+        <h4>Recent sessions</h4>
+        {sessions.map((item) => {
+          const participant = participants.find((candidate) => candidate.id === item.participant_id);
+          return (
+            <article key={item.id} className="runtime-row">
+              <div>
+                <strong>{item.title}</strong>
+                <span>{participant?.email ?? participant?.display_name ?? 'Participant'}</span>
+              </div>
+              <small>{item.status}</small>
+            </article>
+          );
+        })}
+        {sessions.length === 0 && <p className="soft-copy">No sessions yet.</p>}
+      </div>
+
+      <div className="runtime-list">
+        <h4>Extracted artifacts</h4>
+        {artifacts.slice(0, 5).map((item) => (
+          <article key={item.id} className="runtime-row">
+            <div>
+              <strong>{item.title}</strong>
+              <span>{item.body}</span>
+            </div>
+            <small>{item.artifact_type}</small>
+          </article>
+        ))}
+        {artifacts.length === 0 && <p className="soft-copy">Completed interviews will create artifacts here.</p>}
+      </div>
+    </section>
   );
 }
 
@@ -571,6 +966,107 @@ function LoadingScreen() {
   );
 }
 
+function PublicInterview({ token }: { token: string }) {
+  const [interview, setInterview] = useState<PublicInterviewData | null>(null);
+  const [response, setResponse] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadInterview();
+  }, [token]);
+
+  async function loadInterview() {
+    if (!supabase) return;
+
+    setLoading(true);
+    setNotice(null);
+
+    try {
+      const { data, error } = await supabase.rpc('platform_get_interview_by_token', { session_token: token });
+      throwIfError(error);
+      setInterview(data as PublicInterviewData);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not load interview.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitResponse() {
+    if (!supabase || !response.trim()) return;
+
+    setLoading(true);
+    setNotice(null);
+
+    try {
+      const { data, error } = await supabase.rpc('platform_submit_interview_message', {
+        session_token: token,
+        participant_response: response
+      });
+
+      throwIfError(error);
+      setInterview(data as PublicInterviewData);
+      setResponse('');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not save response.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!supabase) return <MissingConfig />;
+
+  return (
+    <main className="interview-shell">
+      <section className="interview-panel">
+        <div className="interview-header">
+          <div className="brand-mark">IO</div>
+          <div>
+            <p className="eyebrow">{interview?.program.name ?? 'Interview'}</p>
+            <h1>{interview?.participant.display_name ?? 'Participant interview'}</h1>
+          </div>
+          {interview && <span className="status-chip">{interview.session.status}</span>}
+        </div>
+
+        {notice && <div className="notice">{notice}</div>}
+
+        <div className="message-list">
+          {interview?.messages.map((message) => (
+            <article key={message.id} className={`message-bubble ${message.role}`}>
+              <span>{message.role === 'agent' ? 'Interviewer' : 'You'}</span>
+              <p>{message.content}</p>
+            </article>
+          ))}
+          {!interview && !loading && <p className="soft-copy">Interview could not be loaded.</p>}
+        </div>
+
+        {interview?.session.status === 'complete' ? (
+          <div className="completion-card">
+            <CheckCircle2 size={22} />
+            <strong>Interview complete</strong>
+            <span>Your responses have been saved.</span>
+          </div>
+        ) : (
+          <div className="response-box">
+            <textarea
+              value={response}
+              onChange={(event) => setResponse(event.target.value)}
+              rows={5}
+              placeholder="Type your response..."
+              disabled={loading}
+            />
+            <button className="primary-button" onClick={() => void submitResponse()} disabled={loading || !response.trim()}>
+              <MessageCircle size={17} />
+              Send response
+            </button>
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
 function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
     <article className="metric-card">
@@ -581,6 +1077,28 @@ function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; 
       </div>
     </article>
   );
+}
+
+function getProgramQuestions(program: ProgramRow): InterviewQuestion[] {
+  const stored = program.manifest_overrides?.questions;
+  if (stored && stored.length > 0) return stored;
+  return defaultQuestionBank[program.program_key] ?? defaultQuestionBank['ai-readiness'];
+}
+
+function formatQuestions(questions: InterviewQuestion[]) {
+  return questions.map((question) => question.text).join('\n');
+}
+
+function parseQuestions(value: string, programKey: string): InterviewQuestion[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((text, index) => ({
+      id: `${programKey}-q-${index + 1}`,
+      text,
+      extract_key: text.length > 42 ? `${text.slice(0, 39)}...` : text
+    }));
 }
 
 function throwIfError(error: unknown) {
@@ -603,6 +1121,9 @@ function normalizeAppData(value: unknown): AppData {
     myWorkspaces: Array.isArray(data.myWorkspaces) ? (data.myWorkspaces as WorkspaceRow[]) : [],
     profiles: Array.isArray(data.profiles) ? (data.profiles as ProfileRow[]) : [],
     programs: Array.isArray(data.programs) ? (data.programs as ProgramRow[]) : [],
+    participants: Array.isArray(data.participants) ? (data.participants as ParticipantRow[]) : [],
+    sessions: Array.isArray(data.sessions) ? (data.sessions as SessionRow[]) : [],
+    artifacts: Array.isArray(data.artifacts) ? (data.artifacts as ArtifactRow[]) : [],
     isPlatformAdmin: data.isPlatformAdmin === true
   };
 }

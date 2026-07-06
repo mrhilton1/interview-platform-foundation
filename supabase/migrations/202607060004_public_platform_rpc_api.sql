@@ -97,11 +97,38 @@ begin
     'programs', coalesce((
       select jsonb_agg(to_jsonb(wp) order by wp.created_at)
       from (
-        select id, workspace_id, program_key, name, status, label_overrides, created_at
+        select id, workspace_id, program_key, name, status, label_overrides, manifest_overrides, created_at
         from platform.workspace_programs
         where workspace_id = any(visible_workspace_ids)
         order by created_at
       ) wp
+    ), '[]'::jsonb),
+    'participants', coalesce((
+      select jsonb_agg(to_jsonb(pt) order by pt.created_at desc)
+      from (
+        select id, workspace_id, program_id, display_name, email, role_label, created_at
+        from platform.participants
+        where workspace_id = any(visible_workspace_ids)
+        order by created_at desc
+      ) pt
+    ), '[]'::jsonb),
+    'sessions', coalesce((
+      select jsonb_agg(to_jsonb(s) order by s.created_at desc)
+      from (
+        select id, workspace_id, program_id, participant_id, track_key, status, title, metadata, created_at, completed_at
+        from platform.interview_sessions
+        where workspace_id = any(visible_workspace_ids)
+        order by created_at desc
+      ) s
+    ), '[]'::jsonb),
+    'artifacts', coalesce((
+      select jsonb_agg(to_jsonb(a) order by a.created_at desc)
+      from (
+        select id, workspace_id, program_id, session_id, artifact_type, title, body, created_at
+        from platform.artifacts
+        where workspace_id = any(visible_workspace_ids)
+        order by created_at desc
+      ) a
     ), '[]'::jsonb),
     'isPlatformAdmin', is_admin
   );
