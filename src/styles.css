@@ -726,11 +726,52 @@ h4 {
   justify-self: end;
 }
 
+.bubble-action {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.52);
+  border: 1px solid rgba(23, 33, 31, 0.08);
+  border-radius: 8px;
+  color: #1f7a68;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+  justify-self: start;
+  padding: 7px 9px;
+}
+
 .response-box {
   border-top: 1px solid #e5eeeb;
   display: grid;
   gap: 12px;
   padding-top: 18px;
+}
+
+.voice-controls {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.voice-button {
+  align-items: center;
+  background: #1f7a68;
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 18px;
+  font-weight: 800;
+  gap: 10px;
+  justify-content: center;
+  min-height: 58px;
+  padding: 14px 16px;
+}
+
+.voice-button.listening {
+  background: #a13d36;
 }
 
 .completion-card {
@@ -758,10 +799,12 @@ h4 {
 
   .topbar,
   .section-heading,
-  .interview-header {
+  .interview-header,
+  .voice-controls {
     align-items: flex-start;
     flex-direction: column;
     gap: 14px;
+    grid-template-columns: 1fr;
   }
 
   .message-bubble {

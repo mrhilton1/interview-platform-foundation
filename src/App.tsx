@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Boxes,
   BriefcaseBusiness,
@@ -11,17 +11,50 @@ import {
   Lock,
   LogOut,
   MessageCircle,
+  Mic,
   Plus,
   RefreshCw,
   Save,
   ShieldCheck,
   Sparkles,
+  Square,
+  Volume2,
   UsersRound
 } from 'lucide-react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
 
 const allowedEmail = 'mikehilton.work@gmail.com';
+
+type SpeechRecognitionConstructor = new () => SpeechRecognition;
+
+type SpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionEvent = {
+  results: {
+    length: number;
+    [index: number]: {
+      isFinal: boolean;
+      [index: number]: {
+        transcript: string;
+      };
+    };
+  };
+};
+
+type SpeechWindow = Window & {
+  SpeechRecognition?: SpeechRecognitionConstructor;
+  webkitSpeechRecognition?: SpeechRecognitionConstructor;
+};
 
 type EditionRow = {
   id: string;
@@ -1000,10 +1033,30 @@ function PublicInterview({ token }: { token: string }) {
   const [response, setResponse] = useState('');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const [speechSupported] = useState(() => {
+    const speechWindow = window as SpeechWindow;
+    return Boolean(speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition);
+  });
+
+  const latestAgentMessage = useMemo(
+    () =>
+      interview?.messages
+        .filter((message) => message.role === 'agent')
+        .sort((a, b) => b.sequence - a.sequence)[0] ?? null,
+    [interview?.messages]
+  );
 
   useEffect(() => {
     void loadInterview();
   }, [token]);
+
+  useEffect(() => {
+    if (latestAgentMessage?.content) {
+      speak(latestAgentMessage.content);
+    }
+  }, [latestAgentMessage?.id]);
 
   async function loadInterview() {
     if (!supabase) return;
@@ -1044,6 +1097,61 @@ function PublicInterview({ token }: { token: string }) {
     }
   }
 
+  function speak(text: string) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function startListening() {
+    const speechWindow = window as SpeechWindow;
+    const Recognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
+
+    if (!Recognition) {
+      setNotice('Voice input is not available in this browser. Chrome is recommended for the MVP.');
+      return;
+    }
+
+    window.speechSynthesis?.cancel();
+
+    const recognition = new Recognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event) => {
+      let transcript = '';
+      for (let index = 0; index < event.results.length; index += 1) {
+        transcript += event.results[index][0].transcript;
+      }
+      setResponse(transcript.trim());
+    };
+
+    recognition.onerror = () => {
+      setIsListening(false);
+      setNotice('Voice capture stopped. You can try the mic again or type the response.');
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.start();
+    recognitionRef.current = recognition;
+    setNotice(null);
+    setIsListening(true);
+  }
+
+  function stopListening() {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setIsListening(false);
+    window.speechSynthesis?.cancel();
+  }
+
   if (!supabase) return <MissingConfig />;
 
   return (
@@ -1065,6 +1173,12 @@ function PublicInterview({ token }: { token: string }) {
             <article key={message.id} className={`message-bubble ${message.role}`}>
               <span>{message.role === 'agent' ? 'Interviewer' : 'You'}</span>
               <p>{message.content}</p>
+              {message.role === 'agent' && (
+                <button className="bubble-action" type="button" onClick={() => speak(message.content)}>
+                  <Volume2 size={15} />
+                  Replay
+                </button>
+              )}
             </article>
           ))}
           {!interview && !loading && <p className="soft-copy">Interview could not be loaded.</p>}
@@ -1078,11 +1192,32 @@ function PublicInterview({ token }: { token: string }) {
           </div>
         ) : (
           <div className="response-box">
+            <div className="voice-controls">
+              <button
+                className={`voice-button ${isListening ? 'listening' : ''}`}
+                type="button"
+                onClick={isListening ? stopListening : startListening}
+                disabled={loading}
+              >
+                {isListening ? <Square size={18} /> : <Mic size={18} />}
+                {isListening ? 'Stop recording' : 'Speak response'}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => latestAgentMessage && speak(latestAgentMessage.content)}
+                disabled={!latestAgentMessage}
+              >
+                <Volume2 size={16} />
+                Replay question
+              </button>
+            </div>
+            {!speechSupported && <p className="soft-copy">Voice input needs a browser with speech recognition support. Chrome works best.</p>}
             <textarea
               value={response}
               onChange={(event) => setResponse(event.target.value)}
               rows={5}
-              placeholder="Type your response..."
+              placeholder="Speak, then review or edit the transcript..."
               disabled={loading}
             />
             <button className="primary-button" onClick={() => void submitResponse()} disabled={loading || !response.trim()}>
