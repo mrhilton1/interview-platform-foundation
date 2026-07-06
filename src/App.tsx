@@ -17,6 +17,8 @@ import {
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
 
+const allowedEmail = 'mikehilton.work@gmail.com';
+
 type EditionRow = {
   id: string;
   key: string;
@@ -77,31 +79,6 @@ const emptyData: AppData = {
   isPlatformAdmin: false
 };
 
-const defaultProgramsByEdition: Record<string, Array<{ key: string; name: string; labels?: Record<string, string> }>> = {
-  'consultant-os': [
-    { key: 'ai-readiness', name: 'Executive AI Readiness' },
-    {
-      key: 'sales-discovery',
-      name: 'Sales Discovery',
-      labels: {
-        participant: 'Sales Leader',
-        artifact: 'Buying Signal',
-        deliverable: 'Sales Enablement Brief'
-      }
-    },
-    {
-      key: 'customer-success-discovery',
-      name: 'Customer Success Discovery',
-      labels: {
-        participant: 'Customer Success Lead',
-        artifact: 'Retention Signal',
-        deliverable: 'Success Playbook'
-      }
-    }
-  ],
-  'legacy-weaver': [{ key: 'legacy-weaver', name: 'Family Story Archive' }]
-};
-
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [data, setData] = useState<AppData>(emptyData);
@@ -150,87 +127,21 @@ export function App() {
     setNotice(null);
 
     try {
-      await ensureProfile(user);
+      const { data: dashboard, error } = await supabase.rpc('platform_get_dashboard');
+      throwIfError(error);
 
-      const [editionsResult, skusResult, adminResult, myMembershipsResult] = await Promise.all([
-        supabase.from('editions').select('id,key,name,positioning,manifest').order('name'),
-        supabase.from('skus').select('id,key,name,edition_id').order('name'),
-        supabase.from('platform_admins').select('user_id').eq('user_id', user.id),
-        supabase.from('workspace_memberships').select('workspace_id,role').eq('user_id', user.id)
-      ]);
-
-      throwIfError(editionsResult.error);
-      throwIfError(skusResult.error);
-      throwIfError(adminResult.error);
-      throwIfError(myMembershipsResult.error);
-
-      const isPlatformAdmin = (adminResult.data ?? []).length > 0;
-      const myWorkspaceIds = (myMembershipsResult.data ?? []).map((membership) => membership.workspace_id);
-
-      const platformWorkspacesResult = isPlatformAdmin
-        ? await supabase.from('workspaces').select('*').order('created_at', { ascending: false })
-        : { data: [], error: null };
-
-      const myWorkspacesResult =
-        myWorkspaceIds.length > 0
-          ? await supabase.from('workspaces').select('*').in('id', myWorkspaceIds).order('created_at', { ascending: false })
-          : { data: [], error: null };
-
-      throwIfError(platformWorkspacesResult.error);
-      throwIfError(myWorkspacesResult.error);
-
-      const workspaceIds = Array.from(
-        new Set([...(platformWorkspacesResult.data ?? []), ...(myWorkspacesResult.data ?? [])].map((workspace) => workspace.id))
-      );
-      const ownerIds = Array.from(
-        new Set([...(platformWorkspacesResult.data ?? []), ...(myWorkspacesResult.data ?? [])].map((workspace) => workspace.owner_user_id))
-      );
-
-      const programsResult =
-        workspaceIds.length > 0
-          ? await supabase.from('workspace_programs').select('*').in('workspace_id', workspaceIds).order('created_at')
-          : { data: [], error: null };
-
-      const profilesResult =
-        ownerIds.length > 0 ? await supabase.from('profiles').select('id,email,display_name').in('id', ownerIds) : { data: [], error: null };
-
-      throwIfError(programsResult.error);
-      throwIfError(profilesResult.error);
-
-      const nextData = {
-        editions: (editionsResult.data ?? []) as EditionRow[],
-        skus: (skusResult.data ?? []) as SkuRow[],
-        platformWorkspaces: (platformWorkspacesResult.data ?? []) as WorkspaceRow[],
-        myWorkspaces: (myWorkspacesResult.data ?? []) as WorkspaceRow[],
-        profiles: (profilesResult.data ?? []) as ProfileRow[],
-        programs: (programsResult.data ?? []) as ProgramRow[],
-        isPlatformAdmin
-      };
+      const nextData = normalizeAppData(dashboard);
 
       setData(nextData);
 
       const defaultWorkspace = nextData.myWorkspaces[0] ?? nextData.platformWorkspaces[0] ?? null;
       setSelectedWorkspaceId((current) => current ?? defaultWorkspace?.id ?? null);
-      setActiveView(isPlatformAdmin ? 'platform' : 'workspace');
+      setActiveView(nextData.isPlatformAdmin ? 'platform' : 'workspace');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Could not load workspace data.');
     } finally {
       setLoading(false);
     }
-  }
-
-  async function ensureProfile(user: User) {
-    if (!supabase) return;
-
-    const emailName = user.email?.split('@')[0] ?? 'User';
-    const { error } = await supabase.from('profiles').upsert({
-      id: user.id,
-      email: user.email,
-      display_name: user.user_metadata?.display_name ?? user.user_metadata?.full_name ?? emailName,
-      avatar_url: user.user_metadata?.avatar_url ?? null
-    });
-
-    throwIfError(error);
   }
 
   async function createWorkspace(input: { name: string; editionKey: string }) {
@@ -240,56 +151,14 @@ export function App() {
     setNotice(null);
 
     try {
-      await ensureProfile(session.user);
-
-      const edition = data.editions.find((item) => item.key === input.editionKey);
-      if (!edition) throw new Error('Edition not found.');
-
-      const skuKey = input.editionKey === 'legacy-weaver' ? 'legacy-family-basic' : 'consultant-pro';
-      const sku = data.skus.find((item) => item.key === skuKey);
-      if (!sku) throw new Error('SKU not found.');
-
-      const { data: workspace, error: workspaceError } = await supabase
-        .from('workspaces')
-        .insert({
-          name: input.name,
-          edition_id: edition.id,
-          sku_id: sku.id,
-          owner_user_id: session.user.id,
-          settings: { provisioned_from: 'demo-ui' }
-        })
-        .select()
-        .single();
-
-      throwIfError(workspaceError);
-
-      const { error: membershipError } = await supabase.from('workspace_memberships').insert({
-        workspace_id: workspace.id,
-        user_id: session.user.id,
-        role: 'owner'
+      const { data: workspace, error } = await supabase.rpc('platform_create_workspace', {
+        workspace_name: input.name,
+        edition_key: input.editionKey
       });
 
-      throwIfError(membershipError);
+      throwIfError(error);
 
-      const programs = defaultProgramsByEdition[input.editionKey] ?? [];
-      if (programs.length > 0) {
-        const { error: programsError } = await supabase.from('workspace_programs').insert(
-          programs.map((program) => ({
-            workspace_id: workspace.id,
-            base_edition_id: edition.id,
-            program_key: program.key,
-            name: program.name,
-            status: 'active',
-            label_overrides: program.labels ?? {},
-            manifest_overrides: {},
-            created_by: session.user.id
-          }))
-        );
-
-        throwIfError(programsError);
-      }
-
-      setSelectedWorkspaceId(workspace.id);
+      setSelectedWorkspaceId((workspace as WorkspaceRow | null)?.id ?? null);
       setActiveView('workspace');
       setNotice(`Created ${input.name}.`);
       await loadData(session.user);
@@ -632,6 +501,11 @@ function AuthScreen() {
 
   async function submit() {
     if (!supabase) return;
+    if (email.trim().toLowerCase() !== allowedEmail) {
+      setNotice(`Access is currently limited to ${allowedEmail}.`);
+      return;
+    }
+
     setBusy(true);
     setNotice(null);
 
@@ -652,7 +526,7 @@ function AuthScreen() {
         <div className="brand-mark">IO</div>
         <p className="eyebrow">Interview Platform</p>
         <h1>{mode === 'sign-in' ? 'Sign in' : 'Create account'}</h1>
-        <p className="soft-copy">Use your Supabase Auth user to enter the platform and workspace views.</p>
+        <p className="soft-copy">Use {allowedEmail} to enter the platform and workspace views.</p>
 
         {notice && <div className="notice">{notice}</div>}
 
@@ -715,4 +589,20 @@ function throwIfError(error: unknown) {
     throw new Error(String((error as { message: unknown }).message));
   }
   throw new Error('Unexpected Supabase error.');
+}
+
+function normalizeAppData(value: unknown): AppData {
+  if (!value || typeof value !== 'object') return emptyData;
+
+  const data = value as Partial<AppData>;
+
+  return {
+    editions: Array.isArray(data.editions) ? (data.editions as EditionRow[]) : [],
+    skus: Array.isArray(data.skus) ? (data.skus as SkuRow[]) : [],
+    platformWorkspaces: Array.isArray(data.platformWorkspaces) ? (data.platformWorkspaces as WorkspaceRow[]) : [],
+    myWorkspaces: Array.isArray(data.myWorkspaces) ? (data.myWorkspaces as WorkspaceRow[]) : [],
+    profiles: Array.isArray(data.profiles) ? (data.profiles as ProfileRow[]) : [],
+    programs: Array.isArray(data.programs) ? (data.programs as ProgramRow[]) : [],
+    isPlatformAdmin: data.isPlatformAdmin === true
+  };
 }
