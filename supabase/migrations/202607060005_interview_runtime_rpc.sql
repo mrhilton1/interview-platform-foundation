@@ -96,7 +96,43 @@ begin
   questions := coalesce(selected_program.manifest_overrides -> 'questions', '[]'::jsonb);
 
   if jsonb_array_length(questions) = 0 then
-    raise exception 'Add at least one interview question before creating a session.' using errcode = '22023';
+    questions := case selected_program.program_key
+      when 'sales-discovery' then
+        '[
+          {"id":"q1","text":"Walk me through how a qualified opportunity moves from first conversation to signed customer.","extract_key":"Sales process"},
+          {"id":"q2","text":"What objections or points of confusion slow deals down most often?","extract_key":"Sales objections"},
+          {"id":"q3","text":"What information do sellers repeatedly need but have trouble finding or explaining?","extract_key":"Enablement gaps"}
+        ]'::jsonb
+      when 'customer-success-discovery' then
+        '[
+          {"id":"q1","text":"What behaviors tell you a customer is getting real value?","extract_key":"Success signals"},
+          {"id":"q2","text":"Where do customers tend to get stuck, surprised, or disappointed?","extract_key":"Retention risks"},
+          {"id":"q3","text":"What should every new team member understand about supporting these customers well?","extract_key":"Support playbook"}
+        ]'::jsonb
+      when 'legacy-weaver' then
+        '[
+          {"id":"q1","text":"Where would you like to begin your story?","extract_key":"Origin story"},
+          {"id":"q2","text":"Tell me about a memory that still feels vivid or meaningful to you.","extract_key":"Meaningful memory"},
+          {"id":"q3","text":"What would you want future generations to understand about your life?","extract_key":"Legacy message"}
+        ]'::jsonb
+      else
+        '[
+          {"id":"q1","text":"Where is your team already using AI today, even informally?","extract_key":"Current AI usage"},
+          {"id":"q2","text":"Which recurring workflows feel slow, manual, or dependent on tribal knowledge?","extract_key":"Workflow friction"},
+          {"id":"q3","text":"What risks, policies, or customer concerns would need to be handled before AI could be adopted more broadly?","extract_key":"Adoption risks"}
+        ]'::jsonb
+    end;
+
+    update platform.workspace_programs
+    set manifest_overrides = jsonb_set(
+          coalesce(manifest_overrides, '{}'::jsonb),
+          '{questions}',
+          questions,
+          true
+        ),
+        updated_at = now()
+    where id = selected_program.id
+    returning * into selected_program;
   end if;
 
   first_question := coalesce(questions -> 0 ->> 'text', 'Tell me about what matters most here.');
